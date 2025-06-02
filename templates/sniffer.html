@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>现代化网页模板</title>
+	<link rel="stylesheet" href="assets/css/style.css">
+</head>
+
+<body>
+	<!-- 导航栏 -->
+	<nav class="navbar">
+		<div class="logo">我的网站</div>
+		<ul class="nav-links">
+			<li><a href="#">首页</a></li>
+			<li><a href="#">关于</a></li>
+			<li><a href="#">服务</a></li>
+			<li><a href="#">联系</a></li>
+		</ul>
+	</nav>
+
+	<!-- 主要内容区 -->
+	<div class="container" style="display: flex; gap: 10px;">
+		<textarea id="dataColumn" readonly></textarea>
+		<script>
+			const socket = new WebSocket('ws://' + window.location.host + '/column');
+			socket.onmessage = function (event) {
+				const data = JSON.parse(event.data);
+				document.getElementById('dataColumn').value = data.data;
+			};
+		</script>
+
+		<textarea id="dataDisplay" readonly></textarea>
+		<script>
+			const socket = new WebSocket('ws://' + window.location.host + '/display');
+			socket.onmessage = function (event) {
+				const data = JSON.parse(event.data);
+				document.getElementById('dataDisplay').value = data.data;
+			};
+		</script>
+	</div>
+
+	<!-- 页脚 -->
+	<footer>
+		<p>&copy; 2025 我的网站. 保留所有权利.</p>
+	</footer>
+
+	<script src="assets/js/script.js"></script>
+</body>
+
+</html>
