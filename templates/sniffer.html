@@ -4,49 +4,232 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>现代化网页模板</title>
-	<link rel="stylesheet" href="assets/css/style.css">
+	<title>抓包数据查看器</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			margin: 0;
+			padding: 0;
+			display: flex;
+			height: 100vh;
+		}
+
+		#sidebar {
+			width: 450px;
+			background-color: #f5f5f5;
+			border-right: 1px solid #ddd;
+			overflow-y: auto;
+			padding: 10px;
+		}
+
+		#content {
+			flex: 1;
+			padding: 20px;
+			overflow-y: auto;
+		}
+
+		.packet-item {
+			padding: 8px 12px;
+			margin-bottom: 5px;
+			background-color: #fff;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			cursor: pointer;
+			transition: background-color 0.2s;
+		}
+
+		.packet-item:hover {
+			background-color: #e9e9e9;
+		}
+
+		.packet-item.active {
+			background-color: #007bff;
+			color: white;
+			border-color: #006fe6;
+		}
+
+		#packet-details {
+			width: 98%;
+			height: 88%;
+			padding: 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			font-family: monospace;
+			white-space: pre-wrap;
+			overflow-y: auto;
+			resize: none;
+			background-color: #f8f9fa;
+		}
+
+		h2 {
+			margin-top: 0;
+			color: #333;
+		}
+
+		.search-box {
+			margin-bottom: 10px;
+			width: 400px;
+			padding: 8px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+		}
+	</style>
 </head>
 
 <body>
-	<!-- 导航栏 -->
-	<nav class="navbar">
-		<div class="logo">我的网站</div>
-		<ul class="nav-links">
-			<li><a href="#">首页</a></li>
-			<li><a href="#">关于</a></li>
-			<li><a href="#">服务</a></li>
-			<li><a href="#">联系</a></li>
-		</ul>
-	</nav>
-
-	<!-- 主要内容区 -->
-	<div class="container" style="display: flex; gap: 10px;">
-		<textarea id="dataColumn" readonly></textarea>
-		<script>
-			const socket = new WebSocket('ws://' + window.location.host + '/column');
-			socket.onmessage = function (event) {
-				const data = JSON.parse(event.data);
-				document.getElementById('dataColumn').value = data.data;
-			};
-		</script>
-
-		<textarea id="dataDisplay" readonly></textarea>
-		<script>
-			const socket = new WebSocket('ws://' + window.location.host + '/display');
-			socket.onmessage = function (event) {
-				const data = JSON.parse(event.data);
-				document.getElementById('dataDisplay').value = data.data;
-			};
-		</script>
+	<div id="sidebar">
+		<h2>抓包列表</h2>
+		<input type="text" id="search" class="search-box" placeholder="搜索抓包数据...">
+		<div id="packet-list">
+			<!-- 动态生成的抓包项将放在这里 -->
+		</div>
 	</div>
 
-	<!-- 页脚 -->
-	<footer>
-		<p>&copy; 2025 我的网站. 保留所有权利.</p>
-	</footer>
+	<div id="content">
+		<h2>抓包详情</h2>
+		<textarea id="packet-details" readonly></textarea>
+	</div>
 
-	<script src="assets/js/script.js"></script>
+	<script>
+		const socket = new WebSocket('ws://' + window.location.host + '/packets');
+		let allPackets = [];
+		let newPackets = [];
+		let searchTerm = '';
+
+		document.getElementById('search').addEventListener('input', function () {
+			const packetList = document.getElementById('packet-list');
+			searchTerm = this.value.toLowerCase();
+			packetList.innerHTML = '';
+		});
+
+		socket.onmessage = function (event) {
+			const data = JSON.parse(event.data);
+			newPackets = Array.isArray(data?.packets) ? data.packets : [];
+			allPackets = [...allPackets, ...newPackets];
+
+			console.log(searchTerm)
+			if (searchTerm === '') {
+				updatePacketList(allPackets);
+				return;
+			}
+
+			const filteredPackets = allPackets.filter(packet => {
+				const srcIP = (packet.ipv6?.src_ip || packet.ipv4?.src_ip || "").toLowerCase();
+				const dstIP = (packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || "").toLowerCase();
+				const protocol = (packet.protocol || "").toLowerCase();
+				const rawData = (packet.rawData || "").toString('hex');
+
+				return (
+					srcIP.includes(searchTerm) ||
+					dstIP.includes(searchTerm) ||
+					protocol.includes(searchTerm) ||
+					rawData.includes(searchTerm)
+				);
+			});
+
+			updatePacketList(filteredPackets);
+		};
+
+		// 更新抓包列表
+		function updatePacketList(packets) {
+			const packetList = document.getElementById('packet-list');
+			packetList.innerHTML = '';
+
+			packets.forEach((packet, index) => {
+				var srcIP = packet.ipv6.src_ip || packet.ipv4.src_ip || "Unknown";
+				var dstIP = packet.ipv6.dst_ip || packet.ipv4.dst_ip || "Unknown";
+				var srcPort = packet.udp.src_port || packet.tcp.src_port || "Unknown";
+				var dstPort = packet.udp.dst_port || packet.tcp.dst_port || "Unknown";
+
+				const packetItem = document.createElement('div');
+
+				packetItem.className = 'packet-item';
+				packetItem.textContent = `${srcIP}:${srcPort} → ${dstIP}:${dstPort} [${packet.protocol}]`;
+				packetItem.dataset.index = allPackets.length - newPackets.length + index;
+
+				packetItem.addEventListener('click', function () {
+					document.querySelectorAll('.packet-item').forEach(item => {
+						item.classList.remove('active');
+					});
+					this.classList.add('active');
+					showPacketDetails(packet);
+				});
+
+				packetList.appendChild(packetItem);
+			});
+		}
+
+		// 显示抓包详情
+		function showPacketDetails(packet) {
+			var srcIP = packet.ipv6.src_ip || packet.ipv4.src_ip || "Unknown";
+			var dstIP = packet.ipv6.dst_ip || packet.ipv4.dst_ip || "Unknown";
+			var srcPort = packet.udp.src_port || packet.tcp.src_port || "Unknown";
+			var dstPort = packet.udp.dst_port || packet.tcp.dst_port || "Unknown";
+
+			const detailsArea = document.getElementById('packet-details');
+
+			// 构建Wireshark风格输出
+			let details = `Packet Timestamp: ${packet.capture_time}\n`;
+			details += `Frame ${packet.frame_id}: ${packet.wire_bytes} bytes on wire (${packet.wire_bytes * 8} bits), `;
+			details += `${packet.captured_bytes} bytes captured (${packet.captured_bytes * 8} bits) on interface ${packet.interface}\n\n`;
+
+			// 以太网层
+			details += `Ethernet II, Src: ${packet.ethernet.src_mac}, Dst: ${packet.ethernet.dst_mac}\n`;
+			details += `    Destination: ${packet.ethernet.dst_mac}\n`;
+			details += `    Source: ${packet.ethernet.src_mac}\n`;
+			details += `    Type: ${packet.ethernet.ether_type}\n`;
+			details += `    [Stream index: ${packet.ethernet.stream_index}]\n\n`;
+
+			// IPv6层
+			if (packet.ipv6.src_ip != "" || packet.ipv6.dst_ip != "") {
+				details += `Internet Protocol Version 6, Src: ${packet.ipv6.src_ip}, Dst: ${packet.ipv6.dst_ip}\n\n`;
+			}
+
+			// IPv4层
+			if (packet.ipv4.src_ip != "" || packet.ipv4.dst_ip != "") {
+				details += `Internet Protocol Version 4, Src: ${packet.ipv4.src_ip}, Dst: ${packet.ipv4.dst_ip}\n`;
+			}
+
+			// UDP层
+			if (packet.udp.src_port != 0 || packet.udp.dst_port != 0) {
+				details += `User Datagram Protocol, Src Port: ${packet.udp.src_port}, Dst Port: ${packet.udp.dst_port}, Len: ${packet.udp.dataLen}\n\n`;
+			}
+
+			// TCP层
+			if (packet.tcp.src_port != 0 || packet.tcp.dst_port != 0) {
+				details += `Transmission Control Protocol, Src Port: ${packet.tcp.src_port}, Dst Port: ${packet.tcp.dst_port}, `;
+				details += `Seq: ${packet.tcp.seq}, Ack: ${packet.tcp.ack}, Len: ${packet.tcp.data_len}\n\n`;
+			}
+
+			// HTTP层
+			if (packet.http.method) {
+				details += `Hypertext Transfer Protocol\n`;
+				details += `    ${packet.http.method} ${packet.http.uri} HTTP/1.1\r\n`;
+
+				// HTTP头部
+				for (const [key, value] of Object.entries(packet.http.headers)) {
+					details += `    ${key}: ${value}\r\n`;
+				}
+				details += `    \r\n\n`;
+				details += `    [Full request URI: http://${packet.http.headers.Host}${packet.http.uri}]\n`;
+				details += `    File Data: ${packet.http.content_len} bytes\n\n`;
+			}
+
+			// 原始数据
+			if (packet.rawData && packet.rawData.length > 0) {
+				// 截取前64字节并转为十六进制
+				const dataSlice = packet.rawData.slice(0, Math.min(64, packet.rawData.length));
+				const hexData = Array.from(dataSlice, byte =>
+					byte.toString(16).padStart(2, '0')).join('');
+
+				details += `Data (${packet.rawData.length} bytes)\n`;
+				details += `    Data […]: ${hexData}\n`;
+				details += `    [Length: ${packet.rawData.length}]\n`;
+			}
+
+			detailsArea.value = details;
+		}
+	</script>
 </body>
 
 </html>

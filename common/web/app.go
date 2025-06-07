@@ -17,7 +17,7 @@ func NewApp() *App {
 
 func (a *App) Run() {
 	device := sniffer.NewDevice(0)
-	device.FindDevices()
+	device.FindDevices("Intel(R) Wi-Fi 6 AX201 160MHz")
 	device.AddFilter("tcp")
 
 	mux := http.NewServeMux()
@@ -27,7 +27,7 @@ func (a *App) Run() {
 		http.ServeFile(w, r, "./templates/sniffer.html")
 	})
 
-	mux.HandleFunc("/column", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/packets", func(w http.ResponseWriter, r *http.Request) {
 		device.Run()
 
 		conn, _ := websocket.Upgrade(w, r, nil, 1024, 1024)
@@ -35,15 +35,14 @@ func (a *App) Run() {
 			http.Error(w, "Could not upgrade connection", http.StatusInternalServerError)
 			return
 		}
-		data := ""
+
 		for {
-			data = device.GetColumn(true) + data
-			if len(data) > 80000 {
-				data = data[:40000]
-				utils.Warnf("Data truncated to half characters")
+			packets := device.CapturePackets(false)
+			if len(packets) == 0 {
+				continue
 			}
-			conn.WriteJSON(map[string]string{
-				"data": data,
+			conn.WriteJSON(map[string][]*sniffer.PacketInfo{
+				"packets": packets,
 			})
 		}
 	})

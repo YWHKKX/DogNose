@@ -11,6 +11,7 @@ require (
 require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/kataras/pio v0.0.14 // indirect
+	github.com/shixiaofeia/gopacket-http v1.0.1 // indirect
 	golang.org/x/net v0.0.0-20190620200207-3b0461eec859 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 )
