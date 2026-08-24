@@ -20,24 +20,26 @@ type Logger struct {
 	level string
 }
 
-func initLogger(name string) *Logger {
-	lock := sync.Mutex{}
-	loggers := make(map[string]*Logger)
-	lock.Lock()
-	defer lock.Unlock()
-	logger, exists := loggers[name]
-	if exists {
-		return logger
-	} else {
-		logger = &Logger{
-			Logger: golog.New(),
-			name:   name,
-		}
+var (
+	loggerLock sync.Mutex
+	loggers    = make(map[string]*Logger)
+)
 
-		logger.SetTimeFormat("[2006-01-02 15:04:05]")
-		loggers[name] = logger
+func initLogger(name string) *Logger {
+	loggerLock.Lock()
+	defer loggerLock.Unlock()
+
+	if logger, exists := loggers[name]; exists {
 		return logger
 	}
+
+	logger := &Logger{
+		Logger: golog.New(),
+		name:   name,
+	}
+	logger.SetTimeFormat("[2006-01-02 15:04:05]")
+	loggers[name] = logger
+	return logger
 }
 
 var GlobalLogger = initLogger("GlobalLogger")

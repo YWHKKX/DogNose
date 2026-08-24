@@ -97,38 +97,38 @@
 		let searchTerm = '';
 
 		document.getElementById('search').addEventListener('input', function () {
-			const packetList = document.getElementById('packet-list');
 			searchTerm = this.value.toLowerCase();
-			packetList.innerHTML = '';
+			renderPacketList();
 		});
 
 		socket.onmessage = function (event) {
 			const data = JSON.parse(event.data);
 			newPackets = Array.isArray(data?.packets) ? data.packets : [];
 			allPackets = [...allPackets, ...newPackets];
-
-			console.log(searchTerm)
-			if (searchTerm === '') {
-				updatePacketList(allPackets);
-				return;
-			}
-
-			const filteredPackets = allPackets.filter(packet => {
-				const srcIP = (packet.ipv6?.src_ip || packet.ipv4?.src_ip || "").toLowerCase();
-				const dstIP = (packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || "").toLowerCase();
-				const protocol = (packet.protocol || "").toLowerCase();
-				const rawData = (packet.rawData || "").toString('hex');
-
-				return (
-					srcIP.includes(searchTerm) ||
-					dstIP.includes(searchTerm) ||
-					protocol.includes(searchTerm) ||
-					rawData.includes(searchTerm)
-				);
-			});
-
-			updatePacketList(filteredPackets);
+			renderPacketList();
 		};
+
+		function renderPacketList() {
+			let packets = allPackets;
+			if (searchTerm !== '') {
+				packets = allPackets.filter(packet => {
+					const srcIP = (packet.ipv6?.src_ip || packet.ipv4?.src_ip || "").toLowerCase();
+					const dstIP = (packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || "").toLowerCase();
+					const protocol = (packet.protocol || "").toLowerCase();
+					const uri = (packet.http?.uri || "").toLowerCase();
+					const method = (packet.http?.method || "").toLowerCase();
+
+					return (
+						srcIP.includes(searchTerm) ||
+						dstIP.includes(searchTerm) ||
+						protocol.includes(searchTerm) ||
+						uri.includes(searchTerm) ||
+						method.includes(searchTerm)
+					);
+				});
+			}
+			updatePacketList(packets);
+		}
 
 		// 更新抓包列表
 		function updatePacketList(packets) {
@@ -192,7 +192,7 @@
 
 			// UDP层
 			if (packet.udp.src_port != 0 || packet.udp.dst_port != 0) {
-				details += `User Datagram Protocol, Src Port: ${packet.udp.src_port}, Dst Port: ${packet.udp.dst_port}, Len: ${packet.udp.dataLen}\n\n`;
+				details += `User Datagram Protocol, Src Port: ${packet.udp.src_port}, Dst Port: ${packet.udp.dst_port}, Len: ${packet.udp.data_len}\n\n`;
 			}
 
 			// TCP层
@@ -211,23 +211,38 @@
 					details += `    ${key}: ${value}\r\n`;
 				}
 				details += `    \r\n\n`;
-				details += `    [Full request URI: http://${packet.http.headers.Host}${packet.http.uri}]\n`;
+				details += `    [Full request URI: http://${packet.http.headers.Host || packet.http.headers.host}${packet.http.uri}]\n`;
 				details += `    File Data: ${packet.http.content_len} bytes\n\n`;
 			}
 
 			// 原始数据
-			if (packet.rawData && packet.rawData.length > 0) {
-				// 截取前64字节并转为十六进制
-				const dataSlice = packet.rawData.slice(0, Math.min(64, packet.rawData.length));
+			if (packet.raw_data && packet.raw_data.length > 0) {
+				const rawBytes = decodeRawData(packet.raw_data);
+				const dataSlice = rawBytes.slice(0, Math.min(64, rawBytes.length));
 				const hexData = Array.from(dataSlice, byte =>
 					byte.toString(16).padStart(2, '0')).join('');
 
-				details += `Data (${packet.rawData.length} bytes)\n`;
+				details += `Data (${rawBytes.length} bytes)\n`;
 				details += `    Data […]: ${hexData}\n`;
-				details += `    [Length: ${packet.rawData.length}]\n`;
+				details += `    [Length: ${rawBytes.length}]\n`;
 			}
 
 			detailsArea.value = details;
+		}
+
+		function decodeRawData(rawData) {
+			if (Array.isArray(rawData)) {
+				return rawData;
+			}
+			if (typeof rawData === 'string') {
+				try {
+					const binary = atob(rawData);
+					return Array.from(binary, char => char.charCodeAt(0));
+				} catch (_) {
+					return [];
+				}
+			}
+			return [];
 		}
 	</script>
 </body>

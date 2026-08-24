@@ -22,6 +22,12 @@ func decodeGBK(s string) string {
 	return result
 }
 
+type DeviceInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Addresses   []string `json:"addresses"`
+}
+
 type Device struct {
 	snapshotLen  int32
 	promiscuous  bool
@@ -66,27 +72,57 @@ func (d *Device) MakeFilter() string {
 	return strings.Join(d.filters, " && ")
 }
 
+func ListDevices() ([]DeviceInfo, error) {
+	devices, err := pcap.FindAllDevs()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]DeviceInfo, 0, len(devices))
+	for _, device := range devices {
+		info := DeviceInfo{
+			Name:        device.Name,
+			Description: device.Description,
+		}
+		for _, address := range device.Addresses {
+			if address.IP != nil {
+				info.Addresses = append(info.Addresses, address.IP.String())
+			}
+		}
+		result = append(result, info)
+	}
+	return result, nil
+}
+
 func (d *Device) FindDevices(target string) {
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
 		utils.Errorf(err.Error())
+		return
 	}
+
 	fmt.Println("===============================================")
 	fmt.Println("Devices found: ", len(devices))
 	for _, device := range devices {
 		fmt.Println("-----------------------------------------------")
 		fmt.Println("Name: ", device.Name)
 		fmt.Println("Description: ", device.Description)
-		fmt.Println("Devices addresses: ", device.Description)
 		for _, address := range device.Addresses {
 			fmt.Println("- IP address: ", address.IP)
 			fmt.Println("- Subnet mask: ", address.Netmask)
 		}
-		if device.Description == target {
+
+		if target != "" && (device.Description == target || device.Name == target) {
+			d.targetDevice = device.Name
+			continue
+		}
+
+		if target == "" && d.targetDevice == "" && hasActiveAddress(device.Addresses) {
 			d.targetDevice = device.Name
 		}
 	}
 	fmt.Println("===============================================")
+
 	if d.GetTargetDevice() == "" {
 		utils.Errorf("No suitable network device found")
 		return
@@ -95,20 +131,37 @@ func (d *Device) FindDevices(target string) {
 	utils.Infof("Using device: %s", d.GetTargetDevice())
 }
 
-func (d *Device) Run() {
-	handle, err := pcap.OpenLive(d.targetDevice, d.snapshotLen, d.promiscuous, d.timeout)
-	if err != nil {
-		utils.Errorf(decodeGBK(err.Error()))
+func hasActiveAddress(addresses []pcap.InterfaceAddress) bool {
+	for _, address := range addresses {
+		if address.IP != nil && !address.IP.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Device) Run() error {
+	if d.targetDevice == "" {
+		return fmt.Errorf("target device is not set")
 	}
 
-	err = handle.SetBPFFilter(d.MakeFilter())
+	handle, err := pcap.OpenLive(d.targetDevice, d.snapshotLen, d.promiscuous, d.timeout)
 	if err != nil {
-		utils.Errorf(err.Error())
-		return
+		return fmt.Errorf("%s", decodeGBK(err.Error()))
+	}
+
+	filter := d.MakeFilter()
+	if filter != "" {
+		if err = handle.SetBPFFilter(filter); err != nil {
+			handle.Close()
+			return err
+		}
 	}
 
 	d.packetSource = gopacket.NewPacketSource(handle, handle.LinkType())
 	d.packetSource.NoCopy = true
+	utils.Infof("Packet capture started with filter: %q", filter)
+	return nil
 }
 
 func (d *Device) CapturePackets(isSave ...bool) (ret []*PacketInfo) {
@@ -219,12 +272,7 @@ func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo 
 	// 解析Payload层
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
 		payload := appLayer.Payload()
-		if len(payload) > 4 && strings.HasPrefix(string(payload), "POST") {
-			info.HTTP = parseHTTP(payload)
-			info.Protocol = "HTTP"
-			info.RawData = payload
-		}
-		if len(payload) > 3 && strings.HasPrefix(string(payload), "GET") {
+		if isHTTP(payload) {
 			info.HTTP = parseHTTP(payload)
 			info.Protocol = "HTTP"
 			info.RawData = payload
