@@ -4,246 +4,448 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>抓包数据查看器</title>
+	<title>DogNose - 抓包查看器</title>
 	<style>
+		:root {
+			--bg: #0f1419;
+			--panel: #1a2332;
+			--border: #2d3a4f;
+			--text: #e7ecf3;
+			--muted: #8b9bb4;
+			--accent: #3d8bfd;
+			--http: #4ade80;
+			--tls: #f59e0b;
+			--dns: #a78bfa;
+			--tcp: #60a5fa;
+			--udp: #34d399;
+		}
+
+		* { box-sizing: border-box; }
+
 		body {
-			font-family: Arial, sans-serif;
+			font-family: "Segoe UI", "PingFang SC", sans-serif;
 			margin: 0;
 			padding: 0;
 			display: flex;
+			flex-direction: column;
 			height: 100vh;
+			background: var(--bg);
+			color: var(--text);
+		}
+
+		.toolbar {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			align-items: center;
+			padding: 10px 14px;
+			background: var(--panel);
+			border-bottom: 1px solid var(--border);
+		}
+
+		.toolbar .brand {
+			font-weight: 700;
+			margin-right: 8px;
+			letter-spacing: 0.02em;
+		}
+
+		.btn {
+			background: #243044;
+			color: var(--text);
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			padding: 6px 12px;
+			cursor: pointer;
+			font-size: 13px;
+		}
+
+		.btn:hover { border-color: var(--accent); }
+		.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+		.btn.danger { background: #7f1d1d; border-color: #991b1b; }
+
+		.toolbar input[type="text"] {
+			background: #0f1419;
+			border: 1px solid var(--border);
+			color: var(--text);
+			border-radius: 6px;
+			padding: 6px 10px;
+			font-size: 13px;
+		}
+
+		#filter-input { width: 220px; }
+		#search { width: 180px; }
+
+		.status-dot {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			display: inline-block;
+			margin-right: 6px;
+			background: #ef4444;
+		}
+		.status-dot.on { background: #22c55e; }
+		.status-dot.paused { background: #f59e0b; }
+
+		.stats {
+			margin-left: auto;
+			font-size: 12px;
+			color: var(--muted);
+			display: flex;
+			gap: 14px;
+			flex-wrap: wrap;
+		}
+
+		.main {
+			display: flex;
+			flex: 1;
+			min-height: 0;
 		}
 
 		#sidebar {
-			width: 450px;
-			background-color: #f5f5f5;
-			border-right: 1px solid #ddd;
+			width: 420px;
+			border-right: 1px solid var(--border);
 			overflow-y: auto;
 			padding: 10px;
+			background: #121a24;
 		}
 
 		#content {
 			flex: 1;
-			padding: 20px;
-			overflow-y: auto;
+			padding: 16px;
+			overflow: hidden;
+			display: flex;
+			flex-direction: column;
 		}
 
 		.packet-item {
-			padding: 8px 12px;
-			margin-bottom: 5px;
-			background-color: #fff;
-			border: 1px solid #ddd;
-			border-radius: 4px;
+			padding: 8px 10px;
+			margin-bottom: 4px;
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 6px;
 			cursor: pointer;
-			transition: background-color 0.2s;
+			font-size: 12px;
+			font-family: ui-monospace, Consolas, monospace;
+			display: flex;
+			justify-content: space-between;
+			gap: 8px;
 		}
 
-		.packet-item:hover {
-			background-color: #e9e9e9;
-		}
-
+		.packet-item:hover { border-color: var(--accent); }
 		.packet-item.active {
-			background-color: #007bff;
-			color: white;
-			border-color: #006fe6;
+			background: #1e3a5f;
+			border-color: var(--accent);
+		}
+
+		.badge {
+			font-size: 10px;
+			padding: 2px 6px;
+			border-radius: 4px;
+			font-weight: 600;
+			flex-shrink: 0;
+		}
+		.badge.HTTP { background: rgba(74,222,128,.2); color: var(--http); }
+		.badge.TLS { background: rgba(245,158,11,.2); color: var(--tls); }
+		.badge.DNS { background: rgba(167,139,250,.2); color: var(--dns); }
+		.badge.TCP { background: rgba(96,165,250,.2); color: var(--tcp); }
+		.badge.UDP { background: rgba(52,211,153,.2); color: var(--udp); }
+		.badge.IPv4, .badge.IPv6, .badge.Unknown {
+			background: rgba(139,155,180,.2); color: var(--muted);
 		}
 
 		#packet-details {
-			width: 98%;
-			height: 88%;
-			padding: 10px;
-			border: 1px solid #ddd;
-			border-radius: 4px;
-			font-family: monospace;
+			flex: 1;
+			width: 100%;
+			padding: 12px;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			font-family: ui-monospace, Consolas, monospace;
+			font-size: 12px;
 			white-space: pre-wrap;
 			overflow-y: auto;
 			resize: none;
-			background-color: #f8f9fa;
+			background: #0b1017;
+			color: #d6deeb;
 		}
 
-		h2 {
-			margin-top: 0;
-			color: #333;
-		}
+		h2 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
 
-		.search-box {
-			margin-bottom: 10px;
-			width: 400px;
-			padding: 8px;
-			border: 1px solid #ddd;
-			border-radius: 4px;
+		@media (max-width: 900px) {
+			.main { flex-direction: column; }
+			#sidebar { width: 100%; height: 40%; }
 		}
 	</style>
 </head>
 
 <body>
-	<div id="sidebar">
-		<h2>抓包列表</h2>
-		<input type="text" id="search" class="search-box" placeholder="搜索抓包数据...">
-		<div id="packet-list">
-			<!-- 动态生成的抓包项将放在这里 -->
+	<div class="toolbar">
+		<span class="brand">DogNose</span>
+		<span id="conn-label"><span class="status-dot" id="conn-dot"></span>未连接</span>
+		<button class="btn" id="btn-pause">暂停</button>
+		<button class="btn" id="btn-resume" style="display:none">继续</button>
+		<button class="btn danger" id="btn-clear">清空</button>
+		<input type="text" id="filter-input" placeholder="BPF 过滤器，如 tcp port 80">
+		<button class="btn primary" id="btn-filter">应用过滤</button>
+		<input type="text" id="search" placeholder="搜索 IP / 协议 / URI...">
+		<button class="btn" id="btn-export">导出选中</button>
+		<div class="stats" id="stats">
+			<span>包数: 0</span>
+			<span>缓冲: 0</span>
+			<span>流量: 0 B</span>
 		</div>
 	</div>
 
-	<div id="content">
-		<h2>抓包详情</h2>
-		<textarea id="packet-details" readonly></textarea>
+	<div class="main">
+		<div id="sidebar">
+			<h2>抓包列表 <span id="list-count" style="color:var(--muted);font-weight:400"></span></h2>
+			<div id="packet-list"></div>
+		</div>
+		<div id="content">
+			<h2>抓包详情</h2>
+			<textarea id="packet-details" readonly placeholder="选择左侧数据包查看分层详情"></textarea>
+		</div>
 	</div>
 
 	<script>
-		const socket = new WebSocket('ws://' + window.location.host + '/packets');
+		const MAX_PACKETS = 2000;
 		let allPackets = [];
-		let newPackets = [];
 		let searchTerm = '';
+		let selectedPacket = null;
+		let paused = false;
+		let socket = null;
 
-		document.getElementById('search').addEventListener('input', function () {
-			searchTerm = this.value.toLowerCase();
+		const listEl = document.getElementById('packet-list');
+		const detailsEl = document.getElementById('packet-details');
+		const searchEl = document.getElementById('search');
+		const filterEl = document.getElementById('filter-input');
+		const connDot = document.getElementById('conn-dot');
+		const connLabel = document.getElementById('conn-label');
+		const btnPause = document.getElementById('btn-pause');
+		const btnResume = document.getElementById('btn-resume');
+
+		function setConn(state) {
+			connDot.className = 'status-dot' + (state === 'on' ? ' on' : state === 'paused' ? ' paused' : '');
+			connLabel.lastChild.textContent = state === 'on' ? ' 实时抓包中' : state === 'paused' ? ' 已暂停' : ' 未连接';
+		}
+
+		function connect() {
+			const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+			socket = new WebSocket(proto + location.host + '/packets');
+			socket.onopen = () => { setConn(paused ? 'paused' : 'on'); refreshStats(); };
+			socket.onclose = () => {
+				setConn('off');
+				setTimeout(connect, 2000);
+			};
+			socket.onmessage = (event) => {
+				const data = JSON.parse(event.data);
+				const packets = Array.isArray(data?.packets) ? data.packets : [];
+				if (data.type === 'snapshot') {
+					allPackets = packets.slice(-MAX_PACKETS);
+				} else {
+					allPackets = [...allPackets, ...packets].slice(-MAX_PACKETS);
+				}
+				renderPacketList();
+			};
+		}
+
+		async function refreshStats() {
+			try {
+				const res = await fetch('/api/status');
+				const s = await res.json();
+				paused = !!s.paused;
+				btnPause.style.display = paused ? 'none' : '';
+				btnResume.style.display = paused ? '' : 'none';
+				if (socket && socket.readyState === WebSocket.OPEN) {
+					setConn(paused ? 'paused' : 'on');
+				}
+				if (s.filter && !filterEl.dataset.touched) {
+					filterEl.value = s.filter.replace(/^\(|\)$/g, '');
+				}
+				document.getElementById('stats').innerHTML =
+					`<span>包数: ${s.total_packets}</span>` +
+					`<span>缓冲: ${s.buffered_count}</span>` +
+					`<span>流量: ${formatBytes(s.bytes_captured)}</span>` +
+					`<span>客户端: ${s.clients}</span>`;
+			} catch (_) {}
+		}
+
+		function formatBytes(n) {
+			if (n < 1024) return n + ' B';
+			if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+			return (n / 1048576).toFixed(1) + ' MB';
+		}
+
+		searchEl.addEventListener('input', () => {
+			searchTerm = searchEl.value.toLowerCase();
 			renderPacketList();
 		});
+		filterEl.addEventListener('input', () => { filterEl.dataset.touched = '1'; });
 
-		socket.onmessage = function (event) {
-			const data = JSON.parse(event.data);
-			newPackets = Array.isArray(data?.packets) ? data.packets : [];
-			allPackets = [...allPackets, ...newPackets];
+		btnPause.onclick = async () => {
+			await fetch('/api/capture/pause', { method: 'POST' });
+			refreshStats();
+		};
+		btnResume.onclick = async () => {
+			await fetch('/api/capture/resume', { method: 'POST' });
+			refreshStats();
+		};
+		document.getElementById('btn-clear').onclick = async () => {
+			await fetch('/api/capture/clear', { method: 'POST' });
+			allPackets = [];
+			selectedPacket = null;
+			detailsEl.value = '';
 			renderPacketList();
+			refreshStats();
+		};
+		document.getElementById('btn-filter').onclick = async () => {
+			const filter = filterEl.value.trim();
+			const res = await fetch('/api/filter', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ filter })
+			});
+			if (!res.ok) {
+				alert('过滤器无效: ' + await res.text());
+				return;
+			}
+			refreshStats();
+		};
+		document.getElementById('btn-export').onclick = () => {
+			if (!selectedPacket) {
+				alert('请先选择一个数据包');
+				return;
+			}
+			const blob = new Blob([JSON.stringify(selectedPacket, null, 2)], { type: 'application/json' });
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = `packet_${selectedPacket.frame_id}.json`;
+			a.click();
+			URL.revokeObjectURL(a.href);
 		};
 
+		function endpoint(packet) {
+			const srcIP = packet.ipv6?.src_ip || packet.ipv4?.src_ip || '?';
+			const dstIP = packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || '?';
+			const srcPort = packet.udp?.src_port || packet.tcp?.src_port || '';
+			const dstPort = packet.udp?.dst_port || packet.tcp?.dst_port || '';
+			const left = srcPort ? `${srcIP}:${srcPort}` : srcIP;
+			const right = dstPort ? `${dstIP}:${dstPort}` : dstIP;
+			return `${left} → ${right}`;
+		}
+
+		function matchesSearch(packet) {
+			if (!searchTerm) return true;
+			const fields = [
+				packet.protocol,
+				packet.ipv4?.src_ip, packet.ipv4?.dst_ip,
+				packet.ipv6?.src_ip, packet.ipv6?.dst_ip,
+				packet.http?.method, packet.http?.uri, packet.http?.status_code,
+				packet.tls?.sni, packet.tls?.handshake,
+				...(packet.dns?.questions || []),
+				...(packet.dns?.answers || []),
+				packet.tcp?.flags
+			];
+			return fields.some(v => String(v || '').toLowerCase().includes(searchTerm));
+		}
+
 		function renderPacketList() {
-			let packets = allPackets;
-			if (searchTerm !== '') {
-				packets = allPackets.filter(packet => {
-					const srcIP = (packet.ipv6?.src_ip || packet.ipv4?.src_ip || "").toLowerCase();
-					const dstIP = (packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || "").toLowerCase();
-					const protocol = (packet.protocol || "").toLowerCase();
-					const uri = (packet.http?.uri || "").toLowerCase();
-					const method = (packet.http?.method || "").toLowerCase();
-
-					return (
-						srcIP.includes(searchTerm) ||
-						dstIP.includes(searchTerm) ||
-						protocol.includes(searchTerm) ||
-						uri.includes(searchTerm) ||
-						method.includes(searchTerm)
-					);
-				});
-			}
-			updatePacketList(packets);
-		}
-
-		// 更新抓包列表
-		function updatePacketList(packets) {
-			const packetList = document.getElementById('packet-list');
-			packetList.innerHTML = '';
-
-			packets.forEach((packet, index) => {
-				var srcIP = packet.ipv6.src_ip || packet.ipv4.src_ip || "Unknown";
-				var dstIP = packet.ipv6.dst_ip || packet.ipv4.dst_ip || "Unknown";
-				var srcPort = packet.udp.src_port || packet.tcp.src_port || "Unknown";
-				var dstPort = packet.udp.dst_port || packet.tcp.dst_port || "Unknown";
-
-				const packetItem = document.createElement('div');
-
-				packetItem.className = 'packet-item';
-				packetItem.textContent = `${srcIP}:${srcPort} → ${dstIP}:${dstPort} [${packet.protocol}]`;
-				packetItem.dataset.index = allPackets.length - newPackets.length + index;
-
-				packetItem.addEventListener('click', function () {
-					document.querySelectorAll('.packet-item').forEach(item => {
-						item.classList.remove('active');
-					});
-					this.classList.add('active');
+			const packets = allPackets.filter(matchesSearch);
+			document.getElementById('list-count').textContent = `(${packets.length})`;
+			listEl.innerHTML = '';
+			const frag = document.createDocumentFragment();
+			const start = Math.max(0, packets.length - 300);
+			for (let i = start; i < packets.length; i++) {
+				const packet = packets[i];
+				const item = document.createElement('div');
+				item.className = 'packet-item' + (selectedPacket === packet ? ' active' : '');
+				const proto = packet.protocol || 'Unknown';
+				item.innerHTML = `<span>#${packet.frame_id} ${endpoint(packet)}</span><span class="badge ${proto}">${proto}</span>`;
+				item.onclick = () => {
+					selectedPacket = packet;
 					showPacketDetails(packet);
-				});
-
-				packetList.appendChild(packetItem);
-			});
+					renderPacketList();
+				};
+				frag.appendChild(item);
+			}
+			listEl.appendChild(frag);
+			listEl.scrollTop = listEl.scrollHeight;
 		}
 
-		// 显示抓包详情
 		function showPacketDetails(packet) {
-			var srcIP = packet.ipv6.src_ip || packet.ipv4.src_ip || "Unknown";
-			var dstIP = packet.ipv6.dst_ip || packet.ipv4.dst_ip || "Unknown";
-			var srcPort = packet.udp.src_port || packet.tcp.src_port || "Unknown";
-			var dstPort = packet.udp.dst_port || packet.tcp.dst_port || "Unknown";
-
-			const detailsArea = document.getElementById('packet-details');
-
-			// 构建Wireshark风格输出
 			let details = `Packet Timestamp: ${packet.capture_time}\n`;
-			details += `Frame ${packet.frame_id}: ${packet.wire_bytes} bytes on wire (${packet.wire_bytes * 8} bits), `;
-			details += `${packet.captured_bytes} bytes captured (${packet.captured_bytes * 8} bits) on interface ${packet.interface}\n\n`;
+			details += `Frame ${packet.frame_id}: ${packet.wire_bytes} bytes on wire, `;
+			details += `${packet.captured_bytes} bytes captured on interface ${packet.interface}\n`;
+			details += `Protocol: ${packet.protocol}\n\n`;
 
-			// 以太网层
-			details += `Ethernet II, Src: ${packet.ethernet.src_mac}, Dst: ${packet.ethernet.dst_mac}\n`;
-			details += `    Destination: ${packet.ethernet.dst_mac}\n`;
-			details += `    Source: ${packet.ethernet.src_mac}\n`;
-			details += `    Type: ${packet.ethernet.ether_type}\n`;
-			details += `    [Stream index: ${packet.ethernet.stream_index}]\n\n`;
-
-			// IPv6层
-			if (packet.ipv6.src_ip != "" || packet.ipv6.dst_ip != "") {
-				details += `Internet Protocol Version 6, Src: ${packet.ipv6.src_ip}, Dst: ${packet.ipv6.dst_ip}\n\n`;
+			if (packet.ethernet?.src_mac) {
+				details += `Ethernet II, Src: ${packet.ethernet.src_mac}, Dst: ${packet.ethernet.dst_mac}\n`;
+				details += `    Type: ${packet.ethernet.ether_type}\n\n`;
 			}
-
-			// IPv4层
-			if (packet.ipv4.src_ip != "" || packet.ipv4.dst_ip != "") {
-				details += `Internet Protocol Version 4, Src: ${packet.ipv4.src_ip}, Dst: ${packet.ipv4.dst_ip}\n`;
+			if (packet.ipv6?.src_ip || packet.ipv6?.dst_ip) {
+				details += `IPv6, Src: ${packet.ipv6.src_ip}, Dst: ${packet.ipv6.dst_ip}\n\n`;
 			}
-
-			// UDP层
-			if (packet.udp.src_port != 0 || packet.udp.dst_port != 0) {
-				details += `User Datagram Protocol, Src Port: ${packet.udp.src_port}, Dst Port: ${packet.udp.dst_port}, Len: ${packet.udp.data_len}\n\n`;
+			if (packet.ipv4?.src_ip || packet.ipv4?.dst_ip) {
+				details += `IPv4, Src: ${packet.ipv4.src_ip}, Dst: ${packet.ipv4.dst_ip}\n`;
+				if (packet.ipv4.ttl) details += `    TTL: ${packet.ipv4.ttl}\n`;
+				if (packet.ipv4.protocol) details += `    Protocol: ${packet.ipv4.protocol}\n`;
+				details += '\n';
 			}
-
-			// TCP层
-			if (packet.tcp.src_port != 0 || packet.tcp.dst_port != 0) {
-				details += `Transmission Control Protocol, Src Port: ${packet.tcp.src_port}, Dst Port: ${packet.tcp.dst_port}, `;
-				details += `Seq: ${packet.tcp.seq}, Ack: ${packet.tcp.ack}, Len: ${packet.tcp.data_len}\n\n`;
+			if (packet.udp?.src_port || packet.udp?.dst_port) {
+				details += `UDP, Src Port: ${packet.udp.src_port}, Dst Port: ${packet.udp.dst_port}, Len: ${packet.udp.data_len}\n\n`;
 			}
-
-			// HTTP层
-			if (packet.http.method) {
-				details += `Hypertext Transfer Protocol\n`;
-				details += `    ${packet.http.method} ${packet.http.uri} HTTP/1.1\r\n`;
-
-				// HTTP头部
-				for (const [key, value] of Object.entries(packet.http.headers)) {
-					details += `    ${key}: ${value}\r\n`;
+			if (packet.tcp?.src_port || packet.tcp?.dst_port) {
+				details += `TCP, Src Port: ${packet.tcp.src_port}, Dst Port: ${packet.tcp.dst_port}\n`;
+				details += `    Seq: ${packet.tcp.seq}, Ack: ${packet.tcp.ack}, Len: ${packet.tcp.data_len}\n`;
+				if (packet.tcp.flags) details += `    Flags: ${packet.tcp.flags}\n`;
+				if (packet.tcp.window) details += `    Window: ${packet.tcp.window}\n`;
+				details += '\n';
+			}
+			if (packet.dns && (packet.dns.questions?.length || packet.dns.answers?.length || packet.dns.id)) {
+				details += `DNS ID=${packet.dns.id} ${packet.dns.qr ? 'Response' : 'Query'} Opcode=${packet.dns.opcode || ''}\n`;
+				(packet.dns.questions || []).forEach(q => { details += `    Q: ${q}\n`; });
+				(packet.dns.answers || []).forEach(a => { details += `    A: ${a}\n`; });
+				details += '\n';
+			}
+			if (packet.tls?.content_type) {
+				details += `TLS ${packet.tls.version || ''}\n`;
+				details += `    ContentType: ${packet.tls.content_type}\n`;
+				if (packet.tls.handshake) details += `    Handshake: ${packet.tls.handshake}\n`;
+				if (packet.tls.sni) details += `    SNI: ${packet.tls.sni}\n`;
+				details += '\n';
+			}
+			if (packet.http?.method || packet.http?.is_response) {
+				details += `HTTP\n`;
+				if (packet.http.is_response) {
+					details += `    ${packet.http.version || 'HTTP/1.1'} ${packet.http.status_code} ${packet.http.status_text || ''}\n`;
+				} else {
+					details += `    ${packet.http.method} ${packet.http.uri} ${packet.http.version || ''}\n`;
 				}
-				details += `    \r\n\n`;
-				details += `    [Full request URI: http://${packet.http.headers.Host || packet.http.headers.host}${packet.http.uri}]\n`;
-				details += `    File Data: ${packet.http.content_len} bytes\n\n`;
+				for (const [k, v] of Object.entries(packet.http.headers || {})) {
+					details += `    ${k}: ${v}\n`;
+				}
+				details += '\n';
 			}
-
-			// 原始数据
 			if (packet.raw_data && packet.raw_data.length > 0) {
 				const rawBytes = decodeRawData(packet.raw_data);
-				const dataSlice = rawBytes.slice(0, Math.min(64, rawBytes.length));
-				const hexData = Array.from(dataSlice, byte =>
-					byte.toString(16).padStart(2, '0')).join('');
-
-				details += `Data (${rawBytes.length} bytes)\n`;
-				details += `    Data […]: ${hexData}\n`;
-				details += `    [Length: ${rawBytes.length}]\n`;
+				const hexData = Array.from(rawBytes.slice(0, 64), b => b.toString(16).padStart(2, '0')).join(' ');
+				details += `Data (${rawBytes.length} bytes)\n    ${hexData}\n`;
 			}
-
-			detailsArea.value = details;
+			detailsEl.value = details;
 		}
 
 		function decodeRawData(rawData) {
-			if (Array.isArray(rawData)) {
-				return rawData;
-			}
+			if (Array.isArray(rawData)) return rawData;
 			if (typeof rawData === 'string') {
 				try {
-					const binary = atob(rawData);
-					return Array.from(binary, char => char.charCodeAt(0));
-				} catch (_) {
-					return [];
-				}
+					return Array.from(atob(rawData), c => c.charCodeAt(0));
+				} catch (_) { return []; }
 			}
 			return [];
 		}
+
+		connect();
+		refreshStats();
+		setInterval(refreshStats, 2000);
 	</script>
 </body>
 

@@ -2,17 +2,12 @@ package sniffer
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/GolangProject/DogNose/common/utils"
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	"github.com/google/gopacket/pcapgo"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -29,47 +24,74 @@ type DeviceInfo struct {
 }
 
 type Device struct {
+	mu           sync.Mutex
 	snapshotLen  int32
 	promiscuous  bool
 	timeout      time.Duration
 	targetDevice string
 	filters      []string
-	packetLimit  int
+	handle       *pcap.Handle
 	packetSource *gopacket.PacketSource
 }
 
-func NewDevice(packetLimits ...int) *Device {
-	packetLimit := 0
-	if len(packetLimits) > 0 {
-		packetLimit = packetLimits[0]
+func NewDevice(snapshotLen int32, promiscuous bool) *Device {
+	if snapshotLen <= 0 {
+		snapshotLen = 65535
 	}
-
 	return &Device{
-		snapshotLen: 1024,
-		promiscuous: false,
-		timeout:     30 * time.Second,
-		packetLimit: packetLimit,
+		snapshotLen: snapshotLen,
+		promiscuous: promiscuous,
+		timeout:     500 * time.Millisecond,
 	}
 }
 
 func (d *Device) GetTargetDevice() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.targetDevice
 }
 
 func (d *Device) GetFilters() []string {
-	return d.filters
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.filters))
+	copy(out, d.filters)
+	return out
 }
 
 func (d *Device) SetFilters(filters []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.filters = filters
 }
 
 func (d *Device) AddFilter(filter string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.filters = append(d.filters, filter)
 }
 
 func (d *Device) MakeFilter() string {
-	return strings.Join(d.filters, " && ")
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return joinFilters(d.filters)
+}
+
+func joinFilters(filters []string) string {
+	parts := make([]string, 0, len(filters))
+	for _, f := range filters {
+		if f != "" {
+			parts = append(parts, "("+f+")")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += " and " + parts[i]
+	}
+	return result
 }
 
 func ListDevices() ([]DeviceInfo, error) {
@@ -113,12 +135,19 @@ func (d *Device) FindDevices(target string) {
 		}
 
 		if target != "" && (device.Description == target || device.Name == target) {
+			d.mu.Lock()
 			d.targetDevice = device.Name
+			d.mu.Unlock()
 			continue
 		}
 
-		if target == "" && d.targetDevice == "" && hasActiveAddress(device.Addresses) {
+		d.mu.Lock()
+		empty := d.targetDevice == ""
+		d.mu.Unlock()
+		if target == "" && empty && hasActiveAddress(device.Addresses) {
+			d.mu.Lock()
 			d.targetDevice = device.Name
+			d.mu.Unlock()
 		}
 	}
 	fmt.Println("===============================================")
@@ -140,9 +169,17 @@ func hasActiveAddress(addresses []pcap.InterfaceAddress) bool {
 	return false
 }
 
-func (d *Device) Run() error {
+func (d *Device) Open() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if d.targetDevice == "" {
 		return fmt.Errorf("target device is not set")
+	}
+	if d.handle != nil {
+		d.handle.Close()
+		d.handle = nil
+		d.packetSource = nil
 	}
 
 	handle, err := pcap.OpenLive(d.targetDevice, d.snapshotLen, d.promiscuous, d.timeout)
@@ -150,7 +187,7 @@ func (d *Device) Run() error {
 		return fmt.Errorf("%s", decodeGBK(err.Error()))
 	}
 
-	filter := d.MakeFilter()
+	filter := joinFilters(d.filters)
 	if filter != "" {
 		if err = handle.SetBPFFilter(filter); err != nil {
 			handle.Close()
@@ -158,204 +195,59 @@ func (d *Device) Run() error {
 		}
 	}
 
+	d.handle = handle
 	d.packetSource = gopacket.NewPacketSource(handle, handle.LinkType())
 	d.packetSource.NoCopy = true
-	utils.Infof("Packet capture started with filter: %q", filter)
+	utils.Infof("Packet capture opened with filter: %q", filter)
 	return nil
 }
 
-func (d *Device) CapturePackets(isSave ...bool) (ret []*PacketInfo) {
-	if d.packetSource == nil {
-		utils.Errorf("Packet source is not initialized. Please run Run() first")
+// Deprecated: use Open.
+func (d *Device) Run() error {
+	return d.Open()
+}
+
+func (d *Device) UpdateFilter(filter string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.filters = nil
+	if filter != "" {
+		d.filters = []string{filter}
+	}
+	if d.handle == nil {
 		return nil
 	}
-
-	Save := func(gopacket.Packet) {}
-	if len(isSave) > 0 && isSave[0] {
-		saveFile := time.Now().Format("2006_01_02_15-04") + ".pcap"
-		currentDir, _ := os.Getwd()
-		savePath := filepath.Join(currentDir, "saves", saveFile)
-
-		var w *pcapgo.Writer
-		_, err := os.Stat(savePath)
-		if err != nil {
-			utils.Warnf("Storage Path: %s does not exist, creating new file", savePath)
-			f, _ := os.Create(savePath)
-			w = pcapgo.NewWriter(f)
-			w.WriteFileHeader(uint32(d.snapshotLen), layers.LinkTypeEthernet)
-		} else {
-			f, _ := os.OpenFile(savePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			w = pcapgo.NewWriter(f)
-		}
-
-		Save = func(packet gopacket.Packet) {
-			w.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
-		}
+	expr := joinFilters(d.filters)
+	if expr == "" {
+		expr = "ip or ip6"
 	}
-
-	frameCount := 0
-	for timeout := time.After(1 * time.Second); ; {
-		select {
-		case <-timeout:
-			return ret
-		case packet := <-d.packetSource.Packets():
-			Save(packet)
-			frameCount++
-			packetInfo := parsePacket(packet, frameCount, d.targetDevice)
-			// formatOutput(packetInfo)
-			ret = append(ret, packetInfo)
-		}
+	if err := d.handle.SetBPFFilter(expr); err != nil {
+		return err
 	}
+	utils.Infof("BPF filter updated to: %q", expr)
+	return nil
 }
 
-func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo {
-	metadata := packet.Metadata()
-	info := &PacketInfo{
-		FrameID:       frameID,
-		CaptureTime:   metadata.Timestamp.String(),
-		Interface:     iface,
-		WireBytes:     metadata.Length,
-		Protocol:      "Unknown",
-		CapturedBytes: metadata.CaptureLength,
+func (d *Device) Packets() <-chan gopacket.Packet {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.packetSource == nil {
+		return nil
 	}
-
-	// 解析以太网层
-	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
-		eth, _ := ethLayer.(*layers.Ethernet)
-		info.Ethernet = EthernetInfo{
-			SrcMAC:      eth.SrcMAC.String(),
-			DstMAC:      eth.DstMAC.String(),
-			EtherType:   eth.EthernetType.String(),
-			StreamIndex: 0,
-		}
-	}
-
-	// 解析IPv6层
-	if ipv6Layer := packet.Layer(layers.LayerTypeIPv6); ipv6Layer != nil {
-		ipv6, _ := ipv6Layer.(*layers.IPv6)
-		info.IPv6 = IPv6Info{
-			SrcIP: ipv6.SrcIP.String(),
-			DstIP: ipv6.DstIP.String(),
-		}
-	}
-
-	// 解析IPv4层
-	if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
-		ipv4, _ := ipv4Layer.(*layers.IPv4)
-		info.IPv4 = IPv4Info{
-			SrcIP: ipv4.SrcIP.String(),
-			DstIP: ipv4.DstIP.String(),
-		}
-	}
-
-	// 解析UDP层
-	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
-		udp, _ := udpLayer.(*layers.UDP)
-		info.UDP = UDPInfo{
-			SrcPort: uint16(udp.SrcPort),
-			DstPort: uint16(udp.DstPort),
-		}
-	}
-
-	// 解析TCP层
-	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-		tcp, _ := tcpLayer.(*layers.TCP)
-		info.TCP = TCPInfo{
-			SrcPort: uint16(tcp.SrcPort),
-			DstPort: uint16(tcp.DstPort),
-			Seq:     tcp.Seq,
-			Ack:     tcp.Ack,
-			DataLen: len(tcp.Payload),
-		}
-	}
-
-	// 解析Payload层
-	if appLayer := packet.ApplicationLayer(); appLayer != nil {
-		payload := appLayer.Payload()
-		if isHTTP(payload) {
-			info.HTTP = parseHTTP(payload)
-			info.Protocol = "HTTP"
-			info.RawData = payload
-		}
-	}
-
-	return info
+	return d.packetSource.Packets()
 }
 
-func parseHTTP(payload []byte) HTTPInfo {
-	httpInfo := HTTPInfo{Headers: make(map[string]string)}
-	lines := strings.Split(string(payload), "\r\n")
-
-	// 解析请求行
-	if len(lines) > 0 {
-		parts := strings.Split(lines[0], " ")
-		if len(parts) >= 2 {
-			httpInfo.Method = parts[0]
-			httpInfo.URI = parts[1]
-		}
-	}
-
-	// 解析头部
-	for _, line := range lines[1:] {
-		if line == "" {
-			break
-		}
-		if colon := strings.Index(line, ":"); colon > 0 {
-			key := strings.TrimSpace(line[:colon])
-			value := strings.TrimSpace(line[colon+1:])
-			httpInfo.Headers[key] = value
-
-			if key == "Content-Length" {
-				if len, err := strconv.Atoi(value); err == nil {
-					httpInfo.ContentLen = len
-				}
-			}
-		}
-	}
-	return httpInfo
+func (d *Device) SnapshotLen() int32 {
+	return d.snapshotLen
 }
 
-func formatOutput(info *PacketInfo) {
-	fmt.Printf("Frame %d: %d bytes on wire (%d bits), %d bytes captured (%d bits) on interface %s\n",
-		info.FrameID, info.WireBytes, info.WireBytes*8,
-		info.CapturedBytes, info.CapturedBytes*8, info.Interface)
-
-	fmt.Println("Ethernet II, Src:", info.Ethernet.SrcMAC, "Dst:", info.Ethernet.DstMAC)
-	fmt.Println("    Destination:", info.Ethernet.DstMAC)
-	fmt.Println("    Source:", info.Ethernet.SrcMAC)
-	fmt.Println("    Type:", info.Ethernet.EtherType)
-	fmt.Println("    [Stream index: ", info.Ethernet.StreamIndex, "]")
-
-	if info.IPv6.SrcIP != "" {
-		fmt.Println("Internet Protocol Version 6, Src:", info.IPv6.SrcIP, "Dst:", info.IPv6.DstIP)
+func (d *Device) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.handle != nil {
+		d.handle.Close()
+		d.handle = nil
+		d.packetSource = nil
 	}
-	if info.IPv4.SrcIP != "" {
-		fmt.Println("Internet Protocol Version 4, Src:", info.IPv4.SrcIP, "Dst:", info.IPv4.DstIP)
-	}
-
-	if info.TCP.SrcPort != 0 {
-		fmt.Printf("Transmission Control Protocol, Src Port: %d, Dst Port: %d, Seq: %d, Ack: %d, Len: %d\n",
-			info.TCP.SrcPort, info.TCP.DstPort, info.TCP.Seq, info.TCP.Ack, info.TCP.DataLen)
-	}
-	if info.UDP.SrcPort != 0 {
-		fmt.Printf("User Datagram Protocol, Src Port: %d, Dst Port: %d\n", info.UDP.SrcPort, info.UDP.DstPort)
-	}
-
-	if info.HTTP.Method != "" {
-		fmt.Println("Hypertext Transfer Protocol")
-		fmt.Printf("    %s %s HTTP/1.1\\r\\n", info.HTTP.Method, info.HTTP.URI)
-		for k, v := range info.HTTP.Headers {
-			fmt.Printf("    %s: %s\\r\\n", k, v)
-		}
-		fmt.Println("    \\r\\n")
-		fmt.Println("    [Full request URI: http://" + info.HTTP.Headers["Host"] + info.HTTP.URI + "]")
-		fmt.Printf("    File Data: %d bytes\n", info.HTTP.ContentLen)
-	}
-
-	if len(info.RawData) > 0 {
-		fmt.Println("Data (", len(info.RawData), "bytes)")
-		fmt.Printf("    Data […]: %x\n", info.RawData[:min(64, len(info.RawData))])
-		fmt.Printf("    [Length: %d]\n", len(info.RawData))
-	}
-	fmt.Println("--------------------------------------------------")
 }
