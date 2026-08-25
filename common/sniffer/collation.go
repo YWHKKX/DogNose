@@ -3,7 +3,7 @@ package sniffer
 import "strings"
 
 func isHTTP(payload []byte) bool {
-	if len(payload) == 0 {
+	if len(payload) < 4 {
 		return false
 	}
 	s := string(payload)
@@ -14,7 +14,6 @@ func isHTTP(payload []byte) bool {
 		strings.HasPrefix(s, "HEAD ") ||
 		strings.HasPrefix(s, "OPTIONS ") ||
 		strings.HasPrefix(s, "PATCH ") ||
-		strings.HasPrefix(s, "HTTP/") ||
-		strings.Contains(s, "Host:") ||
-		strings.Contains(s, "Content-Type:")
+		strings.HasPrefix(s, "CONNECT ") ||
+		strings.HasPrefix(s, "HTTP/")
 }

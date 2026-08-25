@@ -5,8 +5,9 @@ import (
 	"net/http"
 )
 
-func writeJSON(w http.ResponseWriter, v interface{}) error {
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(v)
+	_ = encoder.Encode(v)
 }

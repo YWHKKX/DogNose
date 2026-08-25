@@ -8,7 +8,7 @@ import (
 
 func main() {
 	cfg := config.Load()
-	utils.Debug("Starting packet capture...")
+	utils.Infof("DogNose starting (port=%s filter=%q)", cfg.Port, cfg.Filter)
 
 	app := web.NewApp(cfg)
 	app.Run()
