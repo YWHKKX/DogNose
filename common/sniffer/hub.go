@@ -3,6 +3,7 @@ package sniffer
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,11 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 )
+
+type talkerAcc struct {
+	packets uint64
+	bytes   uint64
+}
 
 type Hub struct {
 	device     *Device
@@ -25,13 +31,21 @@ type Hub struct {
 	stopCh    chan struct{}
 	clients   map[chan []*PacketInfo]struct{}
 
-	buffer []*PacketInfo
+	ring   []*PacketInfo
+	ringPos int
+	ringLen int
+
 	frame  uint64
 	total  uint64
 	bytes  uint64
+	drops  uint64
+
+	protoCounts map[string]uint64
+	talkers     map[string]*talkerAcc
 
 	writer   *pcapgo.Writer
 	pcapFile *os.File
+	pcapPath string
 }
 
 func NewHub(device *Device, bufferSize int, savePCAP bool) *Hub {
@@ -39,11 +53,13 @@ func NewHub(device *Device, bufferSize int, savePCAP bool) *Hub {
 		bufferSize = 100
 	}
 	return &Hub{
-		device:     device,
-		bufferSize: bufferSize,
-		savePCAP:   savePCAP,
-		clients:    make(map[chan []*PacketInfo]struct{}),
-		buffer:     make([]*PacketInfo, 0, bufferSize),
+		device:      device,
+		bufferSize:  bufferSize,
+		savePCAP:    savePCAP,
+		clients:     make(map[chan []*PacketInfo]struct{}),
+		ring:        make([]*PacketInfo, bufferSize),
+		protoCounts: make(map[string]uint64),
+		talkers:     make(map[string]*talkerAcc),
 	}
 }
 
@@ -102,14 +118,58 @@ func (h *Hub) Resume() {
 func (h *Hub) Clear() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.buffer = h.buffer[:0]
+	h.ring = make([]*PacketInfo, h.bufferSize)
+	h.ringPos = 0
+	h.ringLen = 0
+	h.protoCounts = make(map[string]uint64)
+	h.talkers = make(map[string]*talkerAcc)
 	atomic.StoreUint64(&h.total, 0)
 	atomic.StoreUint64(&h.bytes, 0)
 	atomic.StoreUint64(&h.frame, 0)
+	atomic.StoreUint64(&h.drops, 0)
 }
 
 func (h *Hub) SetFilter(filter string) error {
 	return h.device.UpdateFilter(filter)
+}
+
+func (h *Hub) Snapshot() []*PacketInfo {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.snapshotLocked()
+}
+
+func (h *Hub) GetPacket(frameID int) *PacketInfo {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for i := 0; i < h.ringLen; i++ {
+		idx := (h.ringPos - h.ringLen + i + h.bufferSize) % h.bufferSize
+		p := h.ring[idx]
+		if p != nil && p.FrameID == frameID {
+			return p
+		}
+	}
+	return nil
+}
+
+func (h *Hub) StartPCAP() (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.writer != nil {
+		return h.pcapPath, nil
+	}
+	if err := h.openPCAPLocked(); err != nil {
+		return "", err
+	}
+	h.savePCAP = true
+	return h.pcapPath, nil
+}
+
+func (h *Hub) StopPCAP() {
+	h.closePCAP()
+	h.mu.Lock()
+	h.savePCAP = false
+	h.mu.Unlock()
 }
 
 func (h *Hub) Subscribe() (chan []*PacketInfo, []*PacketInfo) {
@@ -117,9 +177,7 @@ func (h *Hub) Subscribe() (chan []*PacketInfo, []*PacketInfo) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.clients[ch] = struct{}{}
-	snapshot := make([]*PacketInfo, len(h.buffer))
-	copy(snapshot, h.buffer)
-	return ch, snapshot
+	return ch, h.snapshotLocked()
 }
 
 func (h *Hub) Unsubscribe(ch chan []*PacketInfo) {
@@ -135,20 +193,61 @@ func (h *Hub) Stats() CaptureStats {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	started := ""
+	pps := 0.0
 	if !h.startedAt.IsZero() {
 		started = h.startedAt.Format(time.RFC3339)
+		elapsed := time.Since(h.startedAt).Seconds()
+		if elapsed > 0 {
+			pps = float64(atomic.LoadUint64(&h.total)) / elapsed
+		}
+	}
+	proto := make(map[string]uint64, len(h.protoCounts))
+	for k, v := range h.protoCounts {
+		proto[k] = v
 	}
 	return CaptureStats{
-		Running:       h.running,
-		Paused:        h.paused,
-		Device:        h.device.GetTargetDevice(),
-		Filter:        h.device.MakeFilter(),
-		TotalPackets:  atomic.LoadUint64(&h.total),
-		BufferedCount: len(h.buffer),
-		Clients:       len(h.clients),
-		BytesCaptured: atomic.LoadUint64(&h.bytes),
-		StartedAt:     started,
+		Running:        h.running,
+		Paused:         h.paused,
+		Device:         h.device.GetTargetDevice(),
+		Filter:         h.device.MakeFilter(),
+		TotalPackets:   atomic.LoadUint64(&h.total),
+		BufferedCount:  h.ringLen,
+		BufferCapacity: h.bufferSize,
+		Clients:        len(h.clients),
+		BytesCaptured:  atomic.LoadUint64(&h.bytes),
+		DroppedBatches: atomic.LoadUint64(&h.drops),
+		PacketsPerSec:  pps,
+		StartedAt:      started,
+		SavingPCAP:     h.writer != nil,
+		ProtocolCounts: proto,
+		TopTalkers:     h.topTalkersLocked(8),
 	}
+}
+
+func (h *Hub) snapshotLocked() []*PacketInfo {
+	out := make([]*PacketInfo, 0, h.ringLen)
+	for i := 0; i < h.ringLen; i++ {
+		idx := (h.ringPos - h.ringLen + i + h.bufferSize) % h.bufferSize
+		out = append(out, h.ring[idx])
+	}
+	return out
+}
+
+func (h *Hub) topTalkersLocked(n int) []TalkerStat {
+	list := make([]TalkerStat, 0, len(h.talkers))
+	for ip, acc := range h.talkers {
+		list = append(list, TalkerStat{IP: ip, Packets: acc.packets, Bytes: acc.bytes})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Bytes == list[j].Bytes {
+			return list[i].Packets > list[j].Packets
+		}
+		return list[i].Bytes > list[j].Bytes
+	})
+	if len(list) > n {
+		list = list[:n]
+	}
+	return list
 }
 
 func (h *Hub) loop(stop <-chan struct{}) {
@@ -205,10 +304,13 @@ func (h *Hub) ingest(packet gopacket.Packet) *PacketInfo {
 	atomic.AddUint64(&h.bytes, uint64(info.CapturedBytes))
 
 	h.mu.Lock()
-	h.buffer = append(h.buffer, info)
-	if len(h.buffer) > h.bufferSize {
-		h.buffer = h.buffer[len(h.buffer)-h.bufferSize:]
+	h.ring[h.ringPos] = info
+	h.ringPos = (h.ringPos + 1) % h.bufferSize
+	if h.ringLen < h.bufferSize {
+		h.ringLen++
 	}
+	h.protoCounts[info.Protocol]++
+	h.recordTalkerLocked(info)
 	writer := h.writer
 	h.mu.Unlock()
 
@@ -218,6 +320,31 @@ func (h *Hub) ingest(packet gopacket.Packet) *PacketInfo {
 	return info
 }
 
+func (h *Hub) recordTalkerLocked(info *PacketInfo) {
+	add := func(ip string) {
+		if ip == "" {
+			return
+		}
+		acc := h.talkers[ip]
+		if acc == nil {
+			acc = &talkerAcc{}
+			h.talkers[ip] = acc
+		}
+		acc.packets++
+		acc.bytes += uint64(info.CapturedBytes)
+	}
+	if info.IPv4.SrcIP != "" {
+		add(info.IPv4.SrcIP)
+		add(info.IPv4.DstIP)
+	} else if info.IPv6.SrcIP != "" {
+		add(info.IPv6.SrcIP)
+		add(info.IPv6.DstIP)
+	} else if info.ARP.SenderIP != "" {
+		add(info.ARP.SenderIP)
+		add(info.ARP.TargetIP)
+	}
+}
+
 func (h *Hub) broadcast(batch []*PacketInfo) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -225,7 +352,7 @@ func (h *Hub) broadcast(batch []*PacketInfo) {
 		select {
 		case ch <- batch:
 		default:
-			// slow client: drop batch to avoid blocking capture
+			atomic.AddUint64(&h.drops, 1)
 		}
 	}
 }
@@ -247,6 +374,7 @@ func (h *Hub) openPCAPLocked() error {
 	}
 	h.pcapFile = f
 	h.writer = w
+	h.pcapPath = path
 	utils.Infof("Saving packets to %s", path)
 	return nil
 }
@@ -258,5 +386,6 @@ func (h *Hub) closePCAP() {
 		_ = h.pcapFile.Close()
 		h.pcapFile = nil
 		h.writer = nil
+		h.pcapPath = ""
 	}
 }

@@ -7,9 +7,12 @@ type PacketInfo struct {
 	WireBytes     int          `json:"wire_bytes"`
 	CapturedBytes int          `json:"captured_bytes"`
 	Protocol      string       `json:"protocol"`
+	Summary       string       `json:"summary,omitempty"`
 	Ethernet      EthernetInfo `json:"ethernet"`
+	ARP           ARPInfo      `json:"arp"`
 	IPv6          IPv6Info     `json:"ipv6"`
 	IPv4          IPv4Info     `json:"ipv4"`
+	ICMP          ICMPInfo     `json:"icmp"`
 	TCP           TCPInfo      `json:"tcp"`
 	UDP           UDPInfo      `json:"udp"`
 	DNS           DNSInfo      `json:"dns"`
@@ -25,9 +28,19 @@ type EthernetInfo struct {
 	StreamIndex int    `json:"stream_index"`
 }
 
+type ARPInfo struct {
+	Operation string `json:"operation,omitempty"`
+	SenderMAC string `json:"sender_mac,omitempty"`
+	SenderIP  string `json:"sender_ip,omitempty"`
+	TargetMAC string `json:"target_mac,omitempty"`
+	TargetIP  string `json:"target_ip,omitempty"`
+}
+
 type IPv6Info struct {
-	SrcIP string `json:"src_ip"`
-	DstIP string `json:"dst_ip"`
+	SrcIP      string `json:"src_ip"`
+	DstIP      string `json:"dst_ip"`
+	NextHeader string `json:"next_header,omitempty"`
+	HopLimit   uint8  `json:"hop_limit,omitempty"`
 }
 
 type IPv4Info struct {
@@ -35,6 +48,18 @@ type IPv4Info struct {
 	DstIP    string `json:"dst_ip"`
 	TTL      uint8  `json:"ttl,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
+	ID       uint16 `json:"id,omitempty"`
+	Flags    string `json:"flags,omitempty"`
+}
+
+type ICMPInfo struct {
+	Version  int    `json:"version,omitempty"`
+	TypeCode string `json:"type_code,omitempty"`
+	Type     uint8  `json:"type,omitempty"`
+	Code     uint8  `json:"code,omitempty"`
+	Checksum uint16 `json:"checksum,omitempty"`
+	ID       uint16 `json:"id,omitempty"`
+	Seq      uint16 `json:"seq,omitempty"`
 }
 
 type UDPInfo struct {
@@ -81,13 +106,25 @@ type HTTPInfo struct {
 }
 
 type CaptureStats struct {
-	Running       bool   `json:"running"`
-	Paused        bool   `json:"paused"`
-	Device        string `json:"device"`
-	Filter        string `json:"filter"`
-	TotalPackets  uint64 `json:"total_packets"`
-	BufferedCount int    `json:"buffered_count"`
-	Clients       int    `json:"clients"`
-	BytesCaptured uint64 `json:"bytes_captured"`
-	StartedAt     string `json:"started_at,omitempty"`
+	Running         bool              `json:"running"`
+	Paused          bool              `json:"paused"`
+	Device          string            `json:"device"`
+	Filter          string            `json:"filter"`
+	TotalPackets    uint64            `json:"total_packets"`
+	BufferedCount   int               `json:"buffered_count"`
+	BufferCapacity  int               `json:"buffer_capacity"`
+	Clients         int               `json:"clients"`
+	BytesCaptured   uint64            `json:"bytes_captured"`
+	DroppedBatches  uint64            `json:"dropped_batches"`
+	PacketsPerSec   float64           `json:"packets_per_sec"`
+	StartedAt       string            `json:"started_at,omitempty"`
+	SavingPCAP      bool              `json:"saving_pcap"`
+	ProtocolCounts  map[string]uint64 `json:"protocol_counts"`
+	TopTalkers      []TalkerStat      `json:"top_talkers"`
+}
+
+type TalkerStat struct {
+	IP      string `json:"ip"`
+	Packets uint64 `json:"packets"`
+	Bytes   uint64 `json:"bytes"`
 }

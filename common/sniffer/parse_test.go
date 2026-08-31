@@ -55,3 +55,27 @@ func TestTCPFlagsJoin(t *testing.T) {
 		t.Fatalf("joinFilters got %q", got)
 	}
 }
+
+func TestFormatAddrs(t *testing.T) {
+	if got := formatHWAddr([]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}); got != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("formatHWAddr=%q", got)
+	}
+	if got := formatIPv4Bytes([]byte{192, 168, 1, 1}); got != "192.168.1.1" {
+		t.Fatalf("formatIPv4Bytes=%q", got)
+	}
+	if formatHWAddr([]byte{1, 2}) != "" || formatIPv4Bytes([]byte{1}) != "" {
+		t.Fatal("short slices should return empty")
+	}
+}
+
+func TestEndpointSummary(t *testing.T) {
+	info := &PacketInfo{
+		Protocol: "TCP",
+		IPv4:     IPv4Info{SrcIP: "1.1.1.1", DstIP: "8.8.8.8"},
+		TCP:      TCPInfo{SrcPort: 1234, DstPort: 443},
+	}
+	got := endpointSummary(info)
+	if got != "1.1.1.1:1234 → 8.8.8.8:443" {
+		t.Fatalf("endpointSummary=%q", got)
+	}
+}

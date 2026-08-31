@@ -30,24 +30,86 @@ func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo 
 		}
 	}
 
+	if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
+		arp := arpLayer.(*layers.ARP)
+		op := "request"
+		if arp.Operation == layers.ARPReply {
+			op = "reply"
+		}
+		info.ARP = ARPInfo{
+			Operation: op,
+			SenderMAC: formatHWAddr(arp.SourceHwAddress),
+			SenderIP:  formatIPv4Bytes(arp.SourceProtAddress),
+			TargetMAC: formatHWAddr(arp.DstHwAddress),
+			TargetIP:  formatIPv4Bytes(arp.DstProtAddress),
+		}
+		info.Protocol = "ARP"
+		info.Summary = fmt.Sprintf("ARP %s who-has %s tell %s", op, info.ARP.TargetIP, info.ARP.SenderIP)
+		if op == "reply" {
+			info.Summary = fmt.Sprintf("ARP %s %s is-at %s", op, info.ARP.SenderIP, info.ARP.SenderMAC)
+		}
+		return info
+	}
+
 	if ipv6Layer := packet.Layer(layers.LayerTypeIPv6); ipv6Layer != nil {
 		ipv6 := ipv6Layer.(*layers.IPv6)
 		info.IPv6 = IPv6Info{
-			SrcIP: ipv6.SrcIP.String(),
-			DstIP: ipv6.DstIP.String(),
+			SrcIP:      ipv6.SrcIP.String(),
+			DstIP:      ipv6.DstIP.String(),
+			NextHeader: ipv6.NextHeader.String(),
+			HopLimit:   ipv6.HopLimit,
 		}
 		info.Protocol = "IPv6"
 	}
 
 	if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
 		ipv4 := ipv4Layer.(*layers.IPv4)
+		flags := make([]string, 0, 2)
+		if ipv4.Flags&layers.IPv4MoreFragments != 0 {
+			flags = append(flags, "MF")
+		}
+		if ipv4.Flags&layers.IPv4DontFragment != 0 {
+			flags = append(flags, "DF")
+		}
 		info.IPv4 = IPv4Info{
 			SrcIP:    ipv4.SrcIP.String(),
 			DstIP:    ipv4.DstIP.String(),
 			TTL:      ipv4.TTL,
 			Protocol: ipv4.Protocol.String(),
+			ID:       ipv4.Id,
+			Flags:    strings.Join(flags, ","),
 		}
 		info.Protocol = "IPv4"
+	}
+
+	if icmp4 := packet.Layer(layers.LayerTypeICMPv4); icmp4 != nil {
+		icmp := icmp4.(*layers.ICMPv4)
+		info.ICMP = ICMPInfo{
+			Version:  4,
+			TypeCode: icmp.TypeCode.String(),
+			Type:     uint8(icmp.TypeCode.Type()),
+			Code:     uint8(icmp.TypeCode.Code()),
+			Checksum: icmp.Checksum,
+			ID:       icmp.Id,
+			Seq:      icmp.Seq,
+		}
+		info.Protocol = "ICMP"
+		info.Summary = fmt.Sprintf("ICMPv4 %s id=%d seq=%d", icmp.TypeCode.String(), icmp.Id, icmp.Seq)
+		return info
+	}
+
+	if icmp6 := packet.Layer(layers.LayerTypeICMPv6); icmp6 != nil {
+		icmp := icmp6.(*layers.ICMPv6)
+		info.ICMP = ICMPInfo{
+			Version:  6,
+			TypeCode: icmp.TypeCode.String(),
+			Type:     uint8(icmp.TypeCode.Type()),
+			Code:     uint8(icmp.TypeCode.Code()),
+			Checksum: icmp.Checksum,
+		}
+		info.Protocol = "ICMPv6"
+		info.Summary = fmt.Sprintf("ICMPv6 %s", icmp.TypeCode.String())
+		return info
 	}
 
 	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
@@ -78,12 +140,18 @@ func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo 
 		dns := dnsLayer.(*layers.DNS)
 		info.DNS = parseDNS(dns)
 		info.Protocol = "DNS"
+		if len(info.DNS.Questions) > 0 {
+			info.Summary = info.DNS.Questions[0]
+		} else if len(info.DNS.Answers) > 0 {
+			info.Summary = info.DNS.Answers[0]
+		}
 		return info
 	}
 
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
 		payload := appLayer.Payload()
 		if len(payload) == 0 {
+			info.Summary = endpointSummary(info)
 			return info
 		}
 
@@ -91,6 +159,13 @@ func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo 
 			info.TLS = parseTLS(payload)
 			info.Protocol = "TLS"
 			info.RawData = payload
+			if info.TLS.SNI != "" {
+				info.Summary = "SNI " + info.TLS.SNI
+			} else if info.TLS.Handshake != "" {
+				info.Summary = info.TLS.Handshake
+			} else {
+				info.Summary = info.TLS.ContentType
+			}
 			return info
 		}
 
@@ -98,10 +173,55 @@ func parsePacket(packet gopacket.Packet, frameID int, iface string) *PacketInfo 
 			info.HTTP = parseHTTP(payload)
 			info.Protocol = "HTTP"
 			info.RawData = payload
+			if info.HTTP.IsResponse {
+				info.Summary = fmt.Sprintf("%s %d %s", info.HTTP.Version, info.HTTP.StatusCode, info.HTTP.StatusText)
+			} else {
+				info.Summary = strings.TrimSpace(info.HTTP.Method + " " + info.HTTP.URI)
+			}
+			return info
 		}
 	}
 
+	info.Summary = endpointSummary(info)
 	return info
+}
+
+func formatHWAddr(b []byte) string {
+	if len(b) < 6 {
+		return ""
+	}
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
+}
+
+func formatIPv4Bytes(b []byte) string {
+	if len(b) < 4 {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
+}
+
+func endpointSummary(info *PacketInfo) string {
+	srcIP := info.IPv6.SrcIP
+	dstIP := info.IPv6.DstIP
+	if srcIP == "" {
+		srcIP = info.IPv4.SrcIP
+	}
+	if dstIP == "" {
+		dstIP = info.IPv4.DstIP
+	}
+	srcPort, dstPort := uint16(0), uint16(0)
+	if info.TCP.SrcPort != 0 || info.TCP.DstPort != 0 {
+		srcPort, dstPort = info.TCP.SrcPort, info.TCP.DstPort
+	} else if info.UDP.SrcPort != 0 || info.UDP.DstPort != 0 {
+		srcPort, dstPort = info.UDP.SrcPort, info.UDP.DstPort
+	}
+	if srcIP == "" && dstIP == "" {
+		return info.Protocol
+	}
+	if srcPort != 0 || dstPort != 0 {
+		return fmt.Sprintf("%s:%d → %s:%d", srcIP, srcPort, dstIP, dstPort)
+	}
+	return fmt.Sprintf("%s → %s", srcIP, dstIP)
 }
 
 func tcpFlags(tcp *layers.TCP) string {
