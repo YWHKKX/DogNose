@@ -18,6 +18,8 @@
 			--dns: #a78bfa;
 			--tcp: #60a5fa;
 			--udp: #34d399;
+			--icmp: #f472b6;
+			--arp: #fb923c;
 		}
 
 		* { box-sizing: border-box; }
@@ -62,6 +64,7 @@
 		.btn:hover { border-color: var(--accent); }
 		.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 		.btn.danger { background: #7f1d1d; border-color: #991b1b; }
+		.btn.active { border-color: var(--accent); color: var(--accent); }
 
 		.toolbar input[type="text"] {
 			background: #0f1419;
@@ -95,6 +98,31 @@
 			flex-wrap: wrap;
 		}
 
+		.proto-bar {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+			padding: 8px 14px;
+			background: #121a24;
+			border-bottom: 1px solid var(--border);
+			align-items: center;
+		}
+
+		.chip {
+			border: 1px solid var(--border);
+			background: transparent;
+			color: var(--muted);
+			border-radius: 999px;
+			padding: 3px 10px;
+			font-size: 12px;
+			cursor: pointer;
+		}
+		.chip.on {
+			color: var(--text);
+			border-color: var(--accent);
+			background: rgba(61, 139, 253, 0.15);
+		}
+
 		.main {
 			display: flex;
 			flex: 1;
@@ -102,7 +130,7 @@
 		}
 
 		#sidebar {
-			width: 420px;
+			width: 440px;
 			border-right: 1px solid var(--border);
 			overflow-y: auto;
 			padding: 10px;
@@ -115,6 +143,54 @@
 			overflow: hidden;
 			display: flex;
 			flex-direction: column;
+			gap: 12px;
+			min-width: 0;
+		}
+
+		.side-panels {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 10px;
+		}
+
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 10px 12px;
+			font-size: 12px;
+		}
+
+		.panel h3 {
+			margin: 0 0 8px;
+			font-size: 13px;
+			color: var(--muted);
+			font-weight: 600;
+		}
+
+		.bar-row {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			margin-bottom: 4px;
+		}
+		.bar-label { width: 64px; color: var(--muted); }
+		.bar-track {
+			flex: 1;
+			height: 6px;
+			background: #0f1419;
+			border-radius: 3px;
+			overflow: hidden;
+		}
+		.bar-fill { height: 100%; background: var(--accent); }
+		.bar-val { width: 40px; text-align: right; color: var(--text); }
+
+		.talker-row {
+			display: flex;
+			justify-content: space-between;
+			gap: 8px;
+			padding: 2px 0;
+			font-family: ui-monospace, Consolas, monospace;
 		}
 
 		.packet-item {
@@ -137,18 +213,35 @@
 			border-color: var(--accent);
 		}
 
+		.packet-meta {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+			min-width: 0;
+		}
+		.packet-meta .sum {
+			color: var(--muted);
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 280px;
+		}
+
 		.badge {
 			font-size: 10px;
 			padding: 2px 6px;
 			border-radius: 4px;
 			font-weight: 600;
 			flex-shrink: 0;
+			align-self: flex-start;
 		}
 		.badge.HTTP { background: rgba(74,222,128,.2); color: var(--http); }
 		.badge.TLS { background: rgba(245,158,11,.2); color: var(--tls); }
 		.badge.DNS { background: rgba(167,139,250,.2); color: var(--dns); }
 		.badge.TCP { background: rgba(96,165,250,.2); color: var(--tcp); }
 		.badge.UDP { background: rgba(52,211,153,.2); color: var(--udp); }
+		.badge.ICMP, .badge.ICMPv6 { background: rgba(244,114,182,.2); color: var(--icmp); }
+		.badge.ARP { background: rgba(251,146,60,.2); color: var(--arp); }
 		.badge.IPv4, .badge.IPv6, .badge.Unknown {
 			background: rgba(139,155,180,.2); color: var(--muted);
 		}
@@ -166,10 +259,14 @@
 			resize: none;
 			background: #0b1017;
 			color: #d6deeb;
+			min-height: 200px;
 		}
 
 		h2 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
 
+		@media (max-width: 1100px) {
+			.side-panels { grid-template-columns: 1fr; }
+		}
 		@media (max-width: 900px) {
 			.main { flex-direction: column; }
 			#sidebar { width: 100%; height: 40%; }
@@ -187,12 +284,19 @@
 		<input type="text" id="filter-input" placeholder="BPF 过滤器，如 tcp port 80">
 		<button class="btn primary" id="btn-filter">应用过滤</button>
 		<input type="text" id="search" placeholder="搜索 IP / 协议 / URI...">
+		<button class="btn" id="btn-autoscroll">自动滚动:开</button>
 		<button class="btn" id="btn-export">导出选中</button>
+		<button class="btn" id="btn-export-all">导出缓冲</button>
+		<button class="btn" id="btn-pcap">开始录制 PCAP</button>
 		<div class="stats" id="stats">
 			<span>包数: 0</span>
 			<span>缓冲: 0</span>
 			<span>流量: 0 B</span>
 		</div>
+	</div>
+
+	<div class="proto-bar" id="proto-bar">
+		<span style="color:var(--muted);font-size:12px">协议:</span>
 	</div>
 
 	<div class="main">
@@ -201,6 +305,16 @@
 			<div id="packet-list"></div>
 		</div>
 		<div id="content">
+			<div class="side-panels">
+				<div class="panel">
+					<h3>协议分布</h3>
+					<div id="proto-stats"></div>
+				</div>
+				<div class="panel">
+					<h3>Top Talkers</h3>
+					<div id="talker-stats"></div>
+				</div>
+			</div>
 			<h2>抓包详情</h2>
 			<textarea id="packet-details" readonly placeholder="选择左侧数据包查看分层详情"></textarea>
 		</div>
@@ -208,11 +322,16 @@
 
 	<script>
 		const MAX_PACKETS = 2000;
+		const PROTOCOLS = ['ALL', 'TCP', 'UDP', 'DNS', 'TLS', 'HTTP', 'ICMP', 'ICMPv6', 'ARP'];
 		let allPackets = [];
 		let searchTerm = '';
+		let protoFilter = 'ALL';
 		let selectedPacket = null;
 		let paused = false;
+		let autoScroll = true;
+		let savingPcap = false;
 		let socket = null;
+		let renderScheduled = false;
 
 		const listEl = document.getElementById('packet-list');
 		const detailsEl = document.getElementById('packet-details');
@@ -222,6 +341,22 @@
 		const connLabel = document.getElementById('conn-label');
 		const btnPause = document.getElementById('btn-pause');
 		const btnResume = document.getElementById('btn-resume');
+		const btnAutoscroll = document.getElementById('btn-autoscroll');
+		const btnPcap = document.getElementById('btn-pcap');
+		const protoBar = document.getElementById('proto-bar');
+
+		PROTOCOLS.forEach(p => {
+			const b = document.createElement('button');
+			b.className = 'chip' + (p === 'ALL' ? ' on' : '');
+			b.textContent = p;
+			b.dataset.proto = p;
+			b.onclick = () => {
+				protoFilter = p;
+				[...protoBar.querySelectorAll('.chip')].forEach(c => c.classList.toggle('on', c.dataset.proto === p));
+				scheduleRender();
+			};
+			protoBar.appendChild(b);
+		});
 
 		function setConn(state) {
 			connDot.className = 'status-dot' + (state === 'on' ? ' on' : state === 'paused' ? ' paused' : '');
@@ -244,8 +379,17 @@
 				} else {
 					allPackets = [...allPackets, ...packets].slice(-MAX_PACKETS);
 				}
-				renderPacketList();
+				scheduleRender();
 			};
+		}
+
+		function scheduleRender() {
+			if (renderScheduled) return;
+			renderScheduled = true;
+			requestAnimationFrame(() => {
+				renderScheduled = false;
+				renderPacketList();
+			});
 		}
 
 		async function refreshStats() {
@@ -253,8 +397,11 @@
 				const res = await fetch('/api/status');
 				const s = await res.json();
 				paused = !!s.paused;
+				savingPcap = !!s.saving_pcap;
 				btnPause.style.display = paused ? 'none' : '';
 				btnResume.style.display = paused ? '' : 'none';
+				btnPcap.textContent = savingPcap ? '停止录制 PCAP' : '开始录制 PCAP';
+				btnPcap.classList.toggle('active', savingPcap);
 				if (socket && socket.readyState === WebSocket.OPEN) {
 					setConn(paused ? 'paused' : 'on');
 				}
@@ -263,13 +410,43 @@
 				}
 				document.getElementById('stats').innerHTML =
 					`<span>包数: ${s.total_packets}</span>` +
-					`<span>缓冲: ${s.buffered_count}</span>` +
+					`<span>缓冲: ${s.buffered_count}/${s.buffer_capacity || '?'}</span>` +
 					`<span>流量: ${formatBytes(s.bytes_captured)}</span>` +
+					`<span>速率: ${(s.packets_per_sec || 0).toFixed(1)} pps</span>` +
+					`<span>丢批: ${s.dropped_batches || 0}</span>` +
 					`<span>客户端: ${s.clients}</span>`;
+				renderProtoStats(s.protocol_counts || {});
+				renderTalkers(s.top_talkers || []);
 			} catch (_) {}
 		}
 
+		function renderProtoStats(counts) {
+			const el = document.getElementById('proto-stats');
+			const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+			if (!entries.length) {
+				el.innerHTML = '<span style="color:var(--muted)">暂无数据</span>';
+				return;
+			}
+			const max = entries[0][1] || 1;
+			el.innerHTML = entries.map(([k, v]) => {
+				const pct = Math.max(4, Math.round(v / max * 100));
+				return `<div class="bar-row"><span class="bar-label">${k}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><span class="bar-val">${v}</span></div>`;
+			}).join('');
+		}
+
+		function renderTalkers(list) {
+			const el = document.getElementById('talker-stats');
+			if (!list.length) {
+				el.innerHTML = '<span style="color:var(--muted)">暂无数据</span>';
+				return;
+			}
+			el.innerHTML = list.map(t =>
+				`<div class="talker-row"><span>${t.ip}</span><span style="color:var(--muted)">${t.packets} pkts · ${formatBytes(t.bytes)}</span></div>`
+			).join('');
+		}
+
 		function formatBytes(n) {
+			n = Number(n) || 0;
 			if (n < 1024) return n + ' B';
 			if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
 			return (n / 1048576).toFixed(1) + ' MB';
@@ -277,7 +454,7 @@
 
 		searchEl.addEventListener('input', () => {
 			searchTerm = searchEl.value.toLowerCase();
-			renderPacketList();
+			scheduleRender();
 		});
 		filterEl.addEventListener('input', () => { filterEl.dataset.touched = '1'; });
 
@@ -294,7 +471,7 @@
 			allPackets = [];
 			selectedPacket = null;
 			detailsEl.value = '';
-			renderPacketList();
+			scheduleRender();
 			refreshStats();
 		};
 		document.getElementById('btn-filter').onclick = async () => {
@@ -310,22 +487,44 @@
 			}
 			refreshStats();
 		};
+		btnAutoscroll.onclick = () => {
+			autoScroll = !autoScroll;
+			btnAutoscroll.textContent = '自动滚动:' + (autoScroll ? '开' : '关');
+			btnAutoscroll.classList.toggle('active', autoScroll);
+		};
 		document.getElementById('btn-export').onclick = () => {
 			if (!selectedPacket) {
 				alert('请先选择一个数据包');
 				return;
 			}
-			const blob = new Blob([JSON.stringify(selectedPacket, null, 2)], { type: 'application/json' });
-			const a = document.createElement('a');
-			a.href = URL.createObjectURL(blob);
-			a.download = `packet_${selectedPacket.frame_id}.json`;
-			a.click();
-			URL.revokeObjectURL(a.href);
+			downloadJSON(selectedPacket, `packet_${selectedPacket.frame_id}.json`);
+		};
+		document.getElementById('btn-export-all').onclick = () => {
+			const q = protoFilter !== 'ALL' ? `?protocol=${encodeURIComponent(protoFilter)}` : '';
+			window.location.href = '/api/packets/export' + q;
+		};
+		btnPcap.onclick = async () => {
+			const url = savingPcap ? '/api/pcap/stop' : '/api/pcap/start';
+			const res = await fetch(url, { method: 'POST' });
+			if (!res.ok) {
+				alert(await res.text());
+				return;
+			}
+			refreshStats();
 		};
 
+		function downloadJSON(obj, name) {
+			const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = name;
+			a.click();
+			URL.revokeObjectURL(a.href);
+		}
+
 		function endpoint(packet) {
-			const srcIP = packet.ipv6?.src_ip || packet.ipv4?.src_ip || '?';
-			const dstIP = packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || '?';
+			const srcIP = packet.ipv6?.src_ip || packet.ipv4?.src_ip || packet.arp?.sender_ip || '?';
+			const dstIP = packet.ipv6?.dst_ip || packet.ipv4?.dst_ip || packet.arp?.target_ip || '?';
 			const srcPort = packet.udp?.src_port || packet.tcp?.src_port || '';
 			const dstPort = packet.udp?.dst_port || packet.tcp?.dst_port || '';
 			const left = srcPort ? `${srcIP}:${srcPort}` : srcIP;
@@ -334,13 +533,16 @@
 		}
 
 		function matchesSearch(packet) {
+			if (protoFilter !== 'ALL' && packet.protocol !== protoFilter) return false;
 			if (!searchTerm) return true;
 			const fields = [
-				packet.protocol,
+				packet.protocol, packet.summary,
 				packet.ipv4?.src_ip, packet.ipv4?.dst_ip,
 				packet.ipv6?.src_ip, packet.ipv6?.dst_ip,
+				packet.arp?.sender_ip, packet.arp?.target_ip,
 				packet.http?.method, packet.http?.uri, packet.http?.status_code,
 				packet.tls?.sni, packet.tls?.handshake,
+				packet.icmp?.type_code,
 				...(packet.dns?.questions || []),
 				...(packet.dns?.answers || []),
 				packet.tcp?.flags
@@ -359,35 +561,59 @@
 				const item = document.createElement('div');
 				item.className = 'packet-item' + (selectedPacket === packet ? ' active' : '');
 				const proto = packet.protocol || 'Unknown';
-				item.innerHTML = `<span>#${packet.frame_id} ${endpoint(packet)}</span><span class="badge ${proto}">${proto}</span>`;
+				const sum = packet.summary || endpoint(packet);
+				item.innerHTML =
+					`<div class="packet-meta"><span>#${packet.frame_id} ${endpoint(packet)}</span><span class="sum">${escapeHtml(sum)}</span></div>` +
+					`<span class="badge ${proto}">${proto}</span>`;
 				item.onclick = () => {
 					selectedPacket = packet;
 					showPacketDetails(packet);
-					renderPacketList();
+					scheduleRender();
 				};
 				frag.appendChild(item);
 			}
 			listEl.appendChild(frag);
-			listEl.scrollTop = listEl.scrollHeight;
+			if (autoScroll) listEl.scrollTop = listEl.scrollHeight;
+		}
+
+		function escapeHtml(s) {
+			return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 		}
 
 		function showPacketDetails(packet) {
 			let details = `Packet Timestamp: ${packet.capture_time}\n`;
 			details += `Frame ${packet.frame_id}: ${packet.wire_bytes} bytes on wire, `;
 			details += `${packet.captured_bytes} bytes captured on interface ${packet.interface}\n`;
-			details += `Protocol: ${packet.protocol}\n\n`;
+			details += `Protocol: ${packet.protocol}\n`;
+			if (packet.summary) details += `Summary: ${packet.summary}\n`;
+			details += '\n';
 
 			if (packet.ethernet?.src_mac) {
 				details += `Ethernet II, Src: ${packet.ethernet.src_mac}, Dst: ${packet.ethernet.dst_mac}\n`;
 				details += `    Type: ${packet.ethernet.ether_type}\n\n`;
 			}
+			if (packet.arp?.operation) {
+				details += `ARP ${packet.arp.operation}\n`;
+				details += `    Sender: ${packet.arp.sender_mac} (${packet.arp.sender_ip})\n`;
+				details += `    Target: ${packet.arp.target_mac} (${packet.arp.target_ip})\n\n`;
+			}
 			if (packet.ipv6?.src_ip || packet.ipv6?.dst_ip) {
-				details += `IPv6, Src: ${packet.ipv6.src_ip}, Dst: ${packet.ipv6.dst_ip}\n\n`;
+				details += `IPv6, Src: ${packet.ipv6.src_ip}, Dst: ${packet.ipv6.dst_ip}\n`;
+				if (packet.ipv6.next_header) details += `    Next Header: ${packet.ipv6.next_header}\n`;
+				if (packet.ipv6.hop_limit) details += `    Hop Limit: ${packet.ipv6.hop_limit}\n`;
+				details += '\n';
 			}
 			if (packet.ipv4?.src_ip || packet.ipv4?.dst_ip) {
 				details += `IPv4, Src: ${packet.ipv4.src_ip}, Dst: ${packet.ipv4.dst_ip}\n`;
 				if (packet.ipv4.ttl) details += `    TTL: ${packet.ipv4.ttl}\n`;
+				if (packet.ipv4.id) details += `    Identification: ${packet.ipv4.id}\n`;
+				if (packet.ipv4.flags) details += `    Flags: ${packet.ipv4.flags}\n`;
 				if (packet.ipv4.protocol) details += `    Protocol: ${packet.ipv4.protocol}\n`;
+				details += '\n';
+			}
+			if (packet.icmp?.type_code) {
+				details += `ICMP v${packet.icmp.version || '?'}: ${packet.icmp.type_code}\n`;
+				if (packet.icmp.id) details += `    ID: ${packet.icmp.id}, Seq: ${packet.icmp.seq}\n`;
 				details += '\n';
 			}
 			if (packet.udp?.src_port || packet.udp?.dst_port) {
@@ -427,10 +653,21 @@
 			}
 			if (packet.raw_data && packet.raw_data.length > 0) {
 				const rawBytes = decodeRawData(packet.raw_data);
-				const hexData = Array.from(rawBytes.slice(0, 64), b => b.toString(16).padStart(2, '0')).join(' ');
-				details += `Data (${rawBytes.length} bytes)\n    ${hexData}\n`;
+				details += formatHexDump(rawBytes, 256);
 			}
 			detailsEl.value = details;
+		}
+
+		function formatHexDump(bytes, maxLen) {
+			const slice = bytes.slice(0, maxLen);
+			let out = `Data (${bytes.length} bytes` + (bytes.length > maxLen ? `, showing ${maxLen}` : '') + `)\n`;
+			for (let i = 0; i < slice.length; i += 16) {
+				const chunk = slice.slice(i, i + 16);
+				const hex = Array.from(chunk, b => b.toString(16).padStart(2, '0')).join(' ').padEnd(47, ' ');
+				const ascii = Array.from(chunk, b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('');
+				out += `    ${i.toString(16).padStart(4, '0')}  ${hex}  |${ascii}|\n`;
+			}
+			return out;
 		}
 
 		function decodeRawData(rawData) {

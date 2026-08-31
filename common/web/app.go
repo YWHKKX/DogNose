@@ -1,10 +1,16 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/GolangProject/DogNose/common/config"
 	"github.com/GolangProject/DogNose/common/sniffer"
@@ -23,7 +29,7 @@ func NewApp(cfg config.Config) *App {
 		cfg: cfg,
 		upgr: websocket.Upgrader{
 			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
+			WriteBufferSize: 1024 * 64,
 			CheckOrigin:     func(r *http.Request) bool { return true },
 		},
 	}
@@ -55,14 +61,32 @@ func (a *App) Run() {
 	mux.HandleFunc("/api/capture/resume", a.handleResume)
 	mux.HandleFunc("/api/capture/clear", a.handleClear)
 	mux.HandleFunc("/api/filter", a.handleFilter)
+	mux.HandleFunc("/api/packets/export", a.handleExport)
+	mux.HandleFunc("/api/packets/", a.handlePacketByID)
+	mux.HandleFunc("/api/pcap/start", a.handlePCAPStart)
+	mux.HandleFunc("/api/pcap/stop", a.handlePCAPStop)
 	mux.HandleFunc("/packets", a.handlePackets)
 
 	addr := fmt.Sprintf(":%s", a.cfg.Port)
-	utils.Infof("Starting web server on http://127.0.0.1%s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		a.hub.Stop()
-		utils.Fatalf("Web server failed: %v", err)
-	}
+	server := &http.Server{Addr: addr, Handler: mux}
+
+	go func() {
+		utils.Infof("Starting web server on http://127.0.0.1%s", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			a.hub.Stop()
+			utils.Fatalf("Web server failed: %v", err)
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	<-sigCh
+	utils.Info("Shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
+	a.hub.Stop()
 }
 
 func (a *App) handleDevices(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +154,74 @@ func (a *App) handleFilter(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *App) handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	packets := a.hub.Snapshot()
+	proto := r.URL.Query().Get("protocol")
+	if proto != "" && proto != "ALL" {
+		filtered := make([]*sniffer.PacketInfo, 0, len(packets))
+		for _, p := range packets {
+			if p.Protocol == proto {
+				filtered = append(filtered, p)
+			}
+		}
+		packets = filtered
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=dognose_export.json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(map[string]interface{}{
+		"exported_at": time.Now().Format(time.RFC3339),
+		"count":       len(packets),
+		"packets":     packets,
+	})
+}
+
+func (a *App) handlePacketByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := r.URL.Path[len("/api/packets/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid frame id", http.StatusBadRequest)
+		return
+	}
+	p := a.hub.GetPacket(id)
+	if p == nil {
+		http.Error(w, "packet not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, p)
+}
+
+func (a *App) handlePCAPStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path, err := a.hub.StartPCAP()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"path": path, "stats": a.hub.Stats()})
+}
+
+func (a *App) handlePCAPStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	a.hub.StopPCAP()
+	writeJSON(w, a.hub.Stats())
 }
 
 func (a *App) handlePackets(w http.ResponseWriter, r *http.Request) {
